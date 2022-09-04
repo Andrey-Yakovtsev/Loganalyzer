@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "loganalyzer"
+version = "0.1.0"
+description = ""
+authors = ["Andrey-Yakovtsev <3311@list.ru>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+flake8 = "^5.0.4"
+
+[tool.poetry.dev-dependencies]
+flake8 = "^5.0.4"
+flake8-variables-names = "^0.0.5"
+flake8-functions-names = "^0.3.0"
+flake8-annotations = "^2.9.1"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
