@@ -6,14 +6,14 @@
 #                     '$status $body_bytes_sent "$http_referer" '
 #                     '"$http_user_agent" "$http_x_forwarded_for" "$http_X_REQUEST_ID" "$http_X_RB_USER" '
 #                     '$request_time';
+import argparse
 import datetime
 import gzip
 import logging
 import os
 import re
 from collections import namedtuple
-from time import strptime, strftime
-
+from time import strptime
 
 logging.basicConfig(
 
@@ -27,11 +27,9 @@ ch = logging.StreamHandler()
 # ch = logging.FileHandler(filename=f'{datetime.datetime.now()}.log', encoding='utf-8')
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 ch.setFormatter(formatter)
-
-# add ch to logger
 logger.addHandler(ch)
 
-config = {
+LOCAL_CONFIG = {
     "REPORT_SIZE": 1000,
     "REPORT_DIR": "./reports",
     "LOG_DIR": "./log"
@@ -45,12 +43,11 @@ field_names = [
 
 ACCEPTABLE_ARCHIVE_TYPES = ['gz']
 SERVICES_TO_MONITOR = ['nginx_access_ui']
-REPORT_LOGS_DIR = 'report'
 
 File = namedtuple('File', 'path date is_archived')
 
 
-def check_fresh_logfile_name(path: str = 'logs') -> File:
+def check_fresh_logfile_name(path: str = 'log') -> File:
     files_names = []
     latest_date = strptime('0001-01-01', '%Y-%m-%d')
     latest_path = ''
@@ -73,14 +70,14 @@ def check_fresh_logfile_name(path: str = 'logs') -> File:
     return File(latest_path, latest_date, is_archived)
 
 
-def report_exists(date) -> bool:
+def html_report_exists(date, reports_dir: str = LOCAL_CONFIG.get('REPORT_DIR')) -> bool:
     files_names = []
     latest_date = strptime('0001-01-01', '%Y-%m-%d')
-    for _, _, files in os.walk(REPORT_LOGS_DIR):
+    for _, _, files in os.walk(reports_dir):
         files_names.append(files)
     for name in files_names[0]:
-        date = re.search(r'\d{8}', str(name))
-        cleaned_date = strptime(date[0], '%Y%m%d')
+        date = re.search(r'\d{4}.\d{2}.\d{2}', str(name))
+        cleaned_date = strptime(date[0], '%Y.%m.%d')
         if cleaned_date > latest_date:
             latest_date = cleaned_date
     if not latest_date == date:
@@ -90,16 +87,14 @@ def report_exists(date) -> bool:
 
 
 def check_log_is_fresh_and_unprocessed(date) -> bool:
-    """Проверяет, что дата файла сегодняшняя и что отчета с такой датой нет в папке отчеты"""
-    # TODO Не могу сфокусироваться что тут проверяем...
-    yesturday = strptime(strftime(str(datetime.datetime.today() \
-                                       - datetime.timedelta(days=1)).split(' ')[0]), '%Y-%m-%d')
-    today = strptime(strftime(str(datetime.datetime.today()).split(' ')[0]), '%Y-%m-%d')
-    # сегодняшний лог существует и отчет уже есть
-    if date == today and not report_exists(date):
-        # TODO тут остановился - на поиске отчета готового
-        logging.warning("Today's log already processed. Breaking operation")
+    """Проверяет, что дата лога сегодняшняя и что отчета с такой датой нет в папке /reports"""
+    # today = strptime(strftime(str(datetime.datetime.today()).split(' ')[0]), '%Y-%m-%d')
+    today = strptime('2017-06-29', '%Y-%m-%d')  # mocked today )))
+    if date == today and not html_report_exists(date):
+        logging.warning("Today's log already processed. Skipping")
         return True
+    logging.info("Moving to report generation............")
+    return False
 
 
 def check_if_file_is_gz_archived(filename: str) -> bool:
@@ -116,21 +111,33 @@ def check_if_nginx_log(filename: str) -> bool:
     return filename.split('.')[0] == 'nginx-access-ui'
 
 
-def check_for_external_config():
-    pass
+def process_config() -> dict:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', dest='config_file_path', type=str, help='Path to confin file')
+    args = parser.parse_args()
+    if not args.config_file_path:
+        logger.debug('Using local config')
+        return LOCAL_CONFIG
+    else:
+        logger.debug('Using external config')
+        with open(args.config_file_path) as config_file:
+            for line in config_file.readlines():
+                #modifying LOCAL_CONFIG in place
+                LOCAL_CONFIG[line.split('=')[0]] = line.split('=')[1]
+            return LOCAL_CONFIG
 
 
-def process_file(filename: str ='nginx-access-ui.log-20170630.gz', is_archived: bool=False) -> list:
+def process_file(filename: str ='nginx-access-ui.log-20170630.gz', is_archived: bool=False, config_source=LOCAL_CONFIG) -> list:
     result = []
     if is_archived:
         logger.info('Processing GZipped file')
-        with gzip.open(f'logs/{filename}', 'rb') as log_file:
+        with gzip.open(f'{config_source.get("LOG_DIR", "log")}/{filename}', 'rb') as log_file:
             for line in log_file.readlines()[:3]:
                 result.append(line.decode().split(' '))
                 logger.debug(line.decode().split(' '))
     else:
         logger.info('Processing plain file')
-        with open(f'logs/{filename}', 'rb') as log_file:
+        with open(f'{config_source.get("LOG_DIR", "log")}/{filename}', 'rb') as log_file:
             for line in log_file.readlines()[:3]:
                 result.append(line.decode().split(' '))
                 logger.debug(line.decode().split(' '))
@@ -144,8 +151,9 @@ def main():
         logging.warning(f'{filename} is not an NGINX log. Skipping')
         return
     if not check_log_is_fresh_and_unprocessed(date):
+        process_file(filename, is_archived, config_source=process_config())
         return
-    # process_file(filename, is_archived)
+    logging.debug(f'Report for {date} already PROCESSED!!!!. Skipping')
 
 
 if __name__ == "__main__":
@@ -154,13 +162,10 @@ if __name__ == "__main__":
 
 """
 
-Может оказаться, что свежих нет - не является ошибкой
-Проверить, что архив нужного имени, а не какой-нить bz2
 
-Если удачно отработал - работу не переделывает (проверить по наличию файла отчета с текущей датой)
-Добавить --config-арг с указанием пути на конфиг-файл.
-Конфиги сливаются с приоритетом файлового (м.б. пустым)
-Функция, которая парсит лог д.б. генератором
+Проверить, что архив нужного имени, а не какой-нить bz2 << === ПОФИКСИТЬ
+
+Функция, которая парсит лог д.б. генератором 
 
 ###
 Мониторинг
